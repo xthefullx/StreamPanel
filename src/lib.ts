@@ -354,3 +354,60 @@ export function debounce<T extends (...args: any[]) => any>(fn: T, ms: number): 
     timer = setTimeout(() => fn(...args), ms);
   };
 }
+
+// ==================== IMAGE HELPER ====================
+export function isHttpUrl(s?: string | null): boolean {
+  if (!s) return false;
+  return /^https?:\/\//i.test(s);
+}
+
+// ==================== PAGINATION HELPER ====================
+export function paginate<T>(items: T[], page: number, pageSize: number): { data: T[]; total: number; totalPages: number } {
+  const total = items.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const start = (safePage - 1) * pageSize;
+  return { data: items.slice(start, start + pageSize), total, totalPages };
+}
+
+// ==================== M3U ITEM → ENTITY MAPPING ====================
+export function groupSeriesItems(items: ParsedM3UItem[]): Map<string, ParsedM3UItem[]> {
+  const map = new Map<string, ParsedM3UItem[]>();
+  for (const item of items) {
+    if (item.detectedType !== 'series' || !item.seriesInfo) continue;
+    const key = item.seriesInfo.name.toLowerCase().trim();
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(item);
+  }
+  return map;
+}
+
+// ==================== DELIVERY MODE LABELS ====================
+export const DELIVERY_MODE_LABELS: Record<string, string> = {
+  default: 'Padrão',
+  default2: 'Padrão 2',
+  direct: 'Link Direto',
+  direct2: 'Link Direto 2',
+};
+
+// ==================== COPY TO CLIPBOARD ====================
+export async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+    // Fallback
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}

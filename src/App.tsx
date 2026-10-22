@@ -372,6 +372,8 @@ function M3UPage() {
       })
       .then(text => {
         const { items, errors } = parseM3U(text);
+        
+        // Import channels
         const channels = store.getChannels();
         const newChannels: Channel[] = items.filter(i => i.detectedType === 'live').map(item => ({
           id: uid(), name: item.name, tvgId: item.tvgId, tvgName: item.tvgName, logo: item.tvgLogo,
@@ -382,16 +384,94 @@ function M3UPage() {
         }));
         store.setChannels([...channels, ...newChannels]);
         
+        // Import movies
+        const movies = store.getMovies();
+        const newMovies: Movie[] = items.filter(i => i.detectedType === 'movie').map(item => ({
+          id: uid(), name: item.name, url: item.url, cover: item.tvgLogo || '🎬', sourceId: source.id,
+          sourceItemKey: item.key, status: 'available' as const, active: true, adult: false,
+          manualOverrides: [], createdAt: today(), updatedAt: today()
+        }));
+        store.setMovies([...movies, ...newMovies]);
+        
+        // Import series (group episodes by series name)
+        const seriesItems = items.filter(i => i.detectedType === 'series' && i.seriesInfo);
+        const seriesMap = new Map<string, typeof seriesItems>();
+        for (const item of seriesItems) {
+          const key = item.seriesInfo!.name.toLowerCase().trim();
+          if (!seriesMap.has(key)) seriesMap.set(key, []);
+          seriesMap.get(key)!.push(item);
+        }
+        
+        const allSeries = store.getSeries();
+        const allSeasons = store.getSeasons();
+        const allEpisodes = store.getEpisodes();
+        let newSeriesCount = 0, newSeasonsCount = 0, newEpisodesCount = 0;
+        
+        for (const [seriesName, eps] of seriesMap.entries()) {
+          // Create or find series
+          let series = allSeries.find(s => s.name.toLowerCase().trim() === seriesName);
+          if (!series) {
+            series = {
+              id: uid(), name: eps[0].seriesInfo!.name, seasonsCount: 0, episodesCount: 0,
+              status: 'available', active: true, adult: false, manualOverrides: [],
+              sourceId: source.id, createdAt: today(), updatedAt: today()
+            };
+            allSeries.push(series);
+            newSeriesCount++;
+          }
+          
+          // Group episodes by season
+          const seasonMap = new Map<number, typeof eps>();
+          for (const ep of eps) {
+            const sNum = ep.seriesInfo!.season;
+            if (!seasonMap.has(sNum)) seasonMap.set(sNum, []);
+            seasonMap.get(sNum)!.push(ep);
+          }
+          
+          for (const [seasonNum, seasonEps] of seasonMap.entries()) {
+            // Create or find season
+            let season = allSeasons.find(s => s.seriesId === series!.id && s.number === seasonNum);
+            if (!season) {
+              season = {
+                id: uid(), seriesId: series.id, number: seasonNum, order: seasonNum, episodesCount: 0,
+                createdAt: today(), updatedAt: today()
+              };
+              allSeasons.push(season);
+              newSeasonsCount++;
+              series.seasonsCount++;
+            }
+            
+            // Create episodes
+            for (const ep of seasonEps) {
+              const newEp: Episode = {
+                id: uid(), seriesId: series.id, seasonId: season.id, seasonNumber: seasonNum,
+                episodeNumber: ep.seriesInfo!.episode, name: ep.name, url: ep.url,
+                status: 'available', active: true, manualOverrides: [],
+                sourceId: source.id, sourceItemKey: ep.key, createdAt: today(), updatedAt: today()
+              };
+              allEpisodes.push(newEp);
+              season.episodesCount++;
+              series.episodesCount++;
+              newEpisodesCount++;
+            }
+          }
+        }
+        
+        store.setSeries(allSeries);
+        store.setSeasons(allSeasons);
+        store.setEpisodes(allEpisodes);
+        
         // Update source counts
         const updated = sources.map(s => s.id === source.id ? {
           ...s, channelsCount: items.filter(i => i.detectedType === 'live').length,
           moviesCount: items.filter(i => i.detectedType === 'movie').length,
-          seriesCount: items.filter(i => i.detectedType === 'series').length,
+          seriesCount: seriesMap.size,
+          episodesCount: seriesItems.length,
           lastImportAt: now(), lastImportDuration: 5, status: 'active' as const
         } : s);
         setSources(updated); store.setM3USources(updated);
-        audit('import', 'm3u_source', source.id, `${items.length} itens importados`);
-        notify('success', `Importação concluída! ${newChannels.length} canais, ${items.filter(i => i.detectedType === 'movie').length} filmes, ${items.filter(i => i.detectedType === 'series').length} séries.`);
+        audit('import', 'm3u_source', source.id, `${items.length} itens: ${newChannels.length} canais, ${newMovies.length} filmes, ${newSeriesCount} séries, ${newEpisodesCount} episódios`);
+        notify('success', `Importação concluída! ${newChannels.length} canais, ${newMovies.length} filmes, ${newSeriesCount} séries (${newEpisodesCount} episódios).`);
       })
       .catch(e => notify('error', `Erro: ${e.message}`))
       .finally(() => setAnalyzing(false));
@@ -531,7 +611,7 @@ function ChannelsPage() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<Channel | null>(null);
   const [playing, setPlaying] = useState<Channel | null>(null);
-  const [form, setForm] = useState({ name: '', url: '', urlAlt: '', logo: '', categoryId: '', groupTitle: '', tvgId: '', country: '', language: '', adult: false, active: true, deliveryMode: 'default' as const });
+  const [form, setForm] = useState<{ name: string; url: string; urlAlt: string; logo: string; categoryId: string; groupTitle: string; tvgId: string; country: string; language: string; adult: boolean; active: boolean; deliveryMode: 'default' | 'default2' | 'direct' | 'direct2' }>({ name: '', url: '', urlAlt: '', logo: '', categoryId: '', groupTitle: '', tvgId: '', country: '', language: '', adult: false, active: true, deliveryMode: 'default' });
   const { confirm, Component: ConfirmComp } = useConfirm();
 
   const filtered = useMemo(() => {
@@ -702,6 +782,7 @@ function ChannelsPage() {
                     <td className="px-3 py-2">
                       <div className="flex gap-1">
                         <button onClick={() => setPlaying(ch)} className="p-1.5 text-gray-400 hover:text-[#3B82F6] rounded hover:bg-[#0F172A]" title="Testar"><Play size={14} /></button>
+                        <button onClick={() => { navigator.clipboard.writeText(ch.url); notify('success', 'Link copiado!'); }} className="p-1.5 text-gray-400 hover:text-green-400 rounded hover:bg-[#0F172A]" title="Copiar Link"><Copy size={14} /></button>
                         <button onClick={() => { setEditing(ch); setForm({ name: ch.name, url: ch.url, urlAlt: ch.urlAlt || '', logo: ch.logo || '', categoryId: ch.categoryId || '', groupTitle: ch.groupTitle || '', tvgId: ch.tvgId || '', country: ch.country || '', language: ch.language || '', adult: ch.adult, active: ch.active, deliveryMode: ch.deliveryMode }); setShowForm(true); }} className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-[#0F172A]" title="Editar"><Edit size={14} /></button>
                         <button onClick={() => handleDelete(ch.id)} className="p-1.5 text-gray-400 hover:text-red-400 rounded hover:bg-[#0F172A]" title="Excluir"><Trash2 size={14} /></button>
                       </div>
@@ -718,7 +799,9 @@ function ChannelsPage() {
             <Card key={ch.id} className="p-4 hover:border-[#3B82F6]/30 transition-all group">
               <div className="flex items-center gap-3">
                 <input type="checkbox" checked={selected.has(ch.id)} onChange={() => toggleSelect(ch.id)} className="accent-[#3B82F6]" />
-                <div className="w-12 h-12 rounded-lg bg-[#0F172A] flex items-center justify-center text-2xl">{ch.logo || '📺'}</div>
+                <div className="w-12 h-12 rounded-lg bg-[#0F172A] flex items-center justify-center text-2xl overflow-hidden">
+                  {ch.logo?.startsWith('http') ? <img src={ch.logo} alt="" className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display = 'none'; (e.target as HTMLImageElement).parentElement!.innerHTML = '📺'; }} /> : (ch.logo || '📺')}
+                </div>
                 <div className="flex-1 min-w-0">
                   <h3 className="font-medium text-white text-sm truncate">{ch.name}</h3>
                   <p className="text-xs text-gray-500">{getCategoryName(ch.categoryId)}</p>
@@ -964,6 +1047,8 @@ function SeriesPage() {
   const [showEpisodeForm, setShowEpisodeForm] = useState(false);
   const [editingEpisode, setEditingEpisode] = useState<Episode | null>(null);
   const [epForm, setEpForm] = useState({ name: '', url: '', duration: '', cover: '' });
+  const [playingEpisode, setPlayingEpisode] = useState<Episode | null>(null);
+  const [seriesForm, setSeriesForm] = useState({ name: '', originalName: '', cover: '', synopsis: '', year: '', categoryId: '', rating: '' });
   const { confirm, Component: ConfirmComp } = useConfirm();
 
   const filtered = seriesList.filter(s => s.name.toLowerCase().includes(search.toLowerCase()));
@@ -1068,6 +1153,7 @@ function SeriesPage() {
       <ConfirmComp />
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div><h1 className="text-2xl font-bold text-white">Séries</h1><p className="text-gray-400 text-sm">{filtered.length} séries</p></div>
+        <Button onClick={() => { setShowForm(true); setEditing(null); setSeriesForm({ name: '', originalName: '', cover: '', synopsis: '', year: '', categoryId: '', rating: '' }); }}><Plus size={16} className="inline mr-1" /> Nova Série</Button>
       </div>
       <SearchInput value={search} onChange={setSearch} placeholder="Buscar série..." />
 
@@ -1157,7 +1243,7 @@ function SeriesPage() {
                     </div>
                   </div>
                   <div className="flex gap-1">
-                    {ep.url && <button onClick={() => notify('info', `Player: ${ep.name}`)} className="p-1.5 text-gray-400 hover:text-[#3B82F6] rounded hover:bg-[#0B1120]"><Play size={14} /></button>}
+                    {ep.url && <button onClick={() => setPlayingEpisode(ep)} className="p-1.5 text-gray-400 hover:text-[#3B82F6] rounded hover:bg-[#0B1120]"><Play size={14} /></button>}
                     <button onClick={() => { setEditingEpisode(ep); setEpForm({ name: ep.name, url: ep.url, duration: ep.duration || '', cover: ep.cover || '' }); setShowEpisodeForm(true); }} className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-[#0B1120]"><Edit size={14} /></button>
                     <button onClick={() => handleDeleteEpisode(ep.id)} className="p-1.5 text-gray-400 hover:text-red-400 rounded hover:bg-[#0B1120]"><Trash2 size={14} /></button>
                   </div>
@@ -1167,6 +1253,52 @@ function SeriesPage() {
             {seasonEpisodes.length === 0 && <EmptyState icon={<PlayCircle size={32} />} title="Nenhum episódio" />}
           </div>
         )}
+      </Modal>
+
+      {/* Episode Player Modal */}
+      <Modal open={!!playingEpisode} onClose={() => setPlayingEpisode(null)} title={playingEpisode ? `E${String(playingEpisode.episodeNumber).padStart(2, '0')} - ${playingEpisode.name}` : ''} size="lg">
+        {playingEpisode && (
+          <div>
+            {playingEpisode.url ? <HlsPlayer url={playingEpisode.url} type="vod" /> : <div className="aspect-video bg-black rounded-lg flex items-center justify-center"><p className="text-gray-500">URL não disponível</p></div>}
+            <div className="mt-4 text-xs text-gray-400 space-y-1">
+              <p><span className="text-gray-500">Temporada:</span> {playingEpisode.seasonNumber} | <span className="text-gray-500">Episódio:</span> {playingEpisode.episodeNumber}</p>
+              {playingEpisode.duration && <p><span className="text-gray-500">Duração:</span> {playingEpisode.duration}</p>}
+              <p><span className="text-gray-500">Status:</span> {playingEpisode.status}</p>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* New Series Modal */}
+      <Modal open={showForm} onClose={() => setShowForm(false)} title={editing ? 'Editar Série' : 'Nova Série'} size="lg">
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Input label="Nome" value={seriesForm.name} onChange={v => setSeriesForm({ ...seriesForm, name: v })} required />
+            <Input label="Nome Original" value={seriesForm.originalName} onChange={v => setSeriesForm({ ...seriesForm, originalName: v })} />
+            <Input label="Capa (URL ou emoji)" value={seriesForm.cover} onChange={v => setSeriesForm({ ...seriesForm, cover: v })} />
+            <Input label="Ano" value={seriesForm.year} onChange={v => setSeriesForm({ ...seriesForm, year: v })} type="number" />
+            <Input label="Avaliação (0-10)" value={seriesForm.rating} onChange={v => setSeriesForm({ ...seriesForm, rating: v })} type="number" />
+            <Select label="Categoria" value={seriesForm.categoryId} onChange={v => setSeriesForm({ ...seriesForm, categoryId: v })} options={[{ value: '', label: 'Selecionar...' }, ...store.getCategories().filter(c => c.type === 'series').map(c => ({ value: c.id, label: c.name }))]} />
+          </div>
+          <Textarea label="Sinopse" value={seriesForm.synopsis} onChange={v => setSeriesForm({ ...seriesForm, synopsis: v })} rows={3} />
+          <div className="flex gap-3 pt-2">
+            <Button variant="secondary" onClick={() => setShowForm(false)}>Cancelar</Button>
+            <Button onClick={() => {
+              if (!seriesForm.name) return notify('error', 'Nome obrigatório');
+              if (editing) {
+                const updated = seriesList.map(s => s.id === editing.id ? { ...s, name: seriesForm.name, originalName: seriesForm.originalName, cover: seriesForm.cover, year: Number(seriesForm.year) || undefined, rating: Number(seriesForm.rating) || undefined, categoryId: seriesForm.categoryId || undefined, synopsis: seriesForm.synopsis, updatedAt: today() } : s);
+                setSeriesList(updated); store.setSeries(updated);
+                notify('success', 'Série atualizada!');
+              } else {
+                const newS: Series = { id: uid(), name: seriesForm.name, originalName: seriesForm.originalName, cover: seriesForm.cover || '🎬', year: Number(seriesForm.year) || undefined, rating: Number(seriesForm.rating) || undefined, categoryId: seriesForm.categoryId || undefined, synopsis: seriesForm.synopsis, seasonsCount: 0, episodesCount: 0, status: 'available', active: true, adult: false, manualOverrides: [], createdAt: today(), updatedAt: today() };
+                setSeriesList([...seriesList, newS]); store.setSeries([...seriesList, newS]);
+                audit('create', 'series', newS.id, seriesForm.name);
+                notify('success', 'Série criada!');
+              }
+              setShowForm(false); setEditing(null); setSeriesForm({ name: '', originalName: '', cover: '', synopsis: '', year: '', categoryId: '', rating: '' });
+            }}>{editing ? 'Salvar' : 'Criar Série'}</Button>
+          </div>
+        </div>
       </Modal>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
