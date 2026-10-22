@@ -1,14 +1,11 @@
-// Tipos completos do sistema IPTV
-
-export interface Admin {
-  id: string;
-  name: string;
-  email: string;
-  role: 'superadmin' | 'admin';
-  createdAt: string;
-}
+// Tipos completos do sistema IPTV - Evolução StreamPanel
 
 export type ContentType = 'live' | 'movie' | 'series';
+export type DeliveryMode = 'default' | 'default2' | 'direct' | 'direct2';
+export type ItemStatus = 'online' | 'offline' | 'unknown';
+export type Availability = 'available' | 'unavailable' | 'draft';
+export type ImportMode = 'add' | 'update' | 'sync' | 'ignore_duplicates' | 'dry_run';
+export type JobStatus = 'queued' | 'analyzing' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
 
 export interface Category {
   id: string;
@@ -17,13 +14,17 @@ export interface Category {
   parentId?: string;
   order: number;
   active: boolean;
+  adult: boolean;
   itemCount: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface M3USource {
   id: string;
   name: string;
   url: string;
+  credentials?: { username?: string; password?: string };
   type: 'live' | 'vod' | 'series' | 'mixed';
   status: 'active' | 'inactive' | 'error' | 'importing';
   channelsCount: number;
@@ -34,29 +35,61 @@ export interface M3USource {
   errorsCount: number;
   lastImportAt?: string;
   nextImportAt?: string;
-  syncInterval: number; // minutes
+  syncInterval: number;
+  maxTimeout: number;
   createdAt: string;
   updatedAt: string;
-  lastImportDuration?: number; // seconds
+  lastImportDuration?: number;
+}
+
+export interface ParsedM3UItem {
+  key: string;
+  name: string;
+  url: string;
+  tvgId?: string;
+  tvgName?: string;
+  tvgLogo?: string;
+  groupTitle?: string;
+  country?: string;
+  language?: string;
+  rawAttributes: Record<string, string>;
+  detectedType: 'live' | 'movie' | 'series' | 'unknown';
+  seriesInfo?: { name: string; season: number; episode: number };
+  lineIndex: number;
+}
+
+export interface M3UAnalysis {
+  total: number;
+  channels: number;
+  movies: number;
+  series: number;
+  episodes: number;
+  groups: { name: string; count: number; detectedType: string }[];
+  errors: { line: number; message: string }[];
+  duplicates: number;
+  samples: ParsedM3UItem[];
 }
 
 export interface ImportJob {
   id: string;
   sourceId: string;
   sourceName: string;
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
-  mode: 'add' | 'update' | 'sync' | 'ignore_duplicates';
+  status: JobStatus;
+  mode: ImportMode;
   progress: number;
   totalFound: number;
   processed: number;
-  channels: number;
-  movies: number;
-  episodes: number;
+  channelsImported: number;
+  moviesImported: number;
+  seriesImported: number;
+  episodesImported: number;
   duplicates: number;
   errors: number;
   startedAt: string;
   completedAt?: string;
-  logs: string[];
+  logs: { time: string; level: 'info' | 'warn' | 'error'; message: string }[];
+  selectedGroups: string[];
+  tmdbEnrich: boolean;
 }
 
 export interface Channel {
@@ -68,13 +101,22 @@ export interface Channel {
   groupTitle?: string;
   categoryId?: string;
   url: string;
+  urlAlt?: string;
   sourceId?: string;
+  sourceItemKey?: string;
   country?: string;
   language?: string;
-  status: 'online' | 'offline' | 'unknown';
+  adult: boolean;
+  status: ItemStatus;
+  deliveryMode: DeliveryMode;
   active: boolean;
   order: number;
   epgId?: string;
+  epgSourceId?: string;
+  lastTestAt?: string;
+  lastTestStatus?: ItemStatus;
+  lastTestLatency?: number;
+  manualOverrides: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -85,20 +127,35 @@ export interface Movie {
   originalName?: string;
   synopsis?: string;
   year?: number;
+  releaseDate?: string;
   genre?: string[];
+  director?: string;
+  cast?: string[];
   categoryId?: string;
   cover?: string;
-  banner?: string;
+  backdrop?: string;
+  trailer?: string;
   rating?: number;
   duration?: string;
+  durationMinutes?: number;
   url: string;
   sourceId?: string;
+  sourceItemKey?: string;
   format?: string;
+  container?: string;
+  resolution?: string;
+  audio?: string;
+  subtitles?: string[];
   language?: string;
+  country?: string;
   classification?: string;
+  adult: boolean;
   tmdbId?: string;
-  status: 'available' | 'unavailable';
+  imdbId?: string;
+  tmdbSyncedAt?: string;
+  status: Availability;
   active: boolean;
+  manualOverrides: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -109,18 +166,28 @@ export interface Series {
   originalName?: string;
   synopsis?: string;
   year?: number;
+  releaseDate?: string;
   genre?: string[];
+  creators?: string[];
+  cast?: string[];
   categoryId?: string;
   cover?: string;
-  banner?: string;
+  backdrop?: string;
   rating?: number;
-  url?: string;
   sourceId?: string;
+  sourceItemKey?: string;
+  language?: string;
+  country?: string;
+  classification?: string;
+  adult: boolean;
   tmdbId?: string;
+  imdbId?: string;
+  tmdbSyncedAt?: string;
   seasonsCount: number;
   episodesCount: number;
-  status: 'available' | 'unavailable';
+  status: Availability;
   active: boolean;
+  manualOverrides: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -130,7 +197,14 @@ export interface Season {
   seriesId: string;
   number: number;
   name?: string;
+  synopsis?: string;
+  cover?: string;
+  airDate?: string;
+  tmdbId?: string;
   order: number;
+  episodesCount: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Episode {
@@ -142,10 +216,20 @@ export interface Episode {
   name: string;
   synopsis?: string;
   url: string;
+  cover?: string;
   duration?: string;
-  order: number;
+  durationMinutes?: number;
+  airDate?: string;
+  format?: string;
+  language?: string;
+  sourceId?: string;
+  sourceItemKey?: string;
+  tmdbId?: string;
+  status: Availability;
   active: boolean;
+  manualOverrides: string[];
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface Bouquet {
@@ -158,6 +242,7 @@ export interface Bouquet {
   seriesIds: string[];
   active: boolean;
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface Plan {
@@ -171,6 +256,7 @@ export interface Plan {
   bouquetIds: string[];
   active: boolean;
   trial?: boolean;
+  createdAt: string;
 }
 
 export interface Client {
@@ -231,7 +317,6 @@ export interface Server {
   cpu?: number;
   memory?: number;
   disk?: number;
-  network?: number;
   latency?: number;
   lastCheckAt?: string;
   createdAt: string;
@@ -263,7 +348,8 @@ export interface EpgSource {
 
 export interface EpgProgram {
   id: string;
-  channelId: string;
+  sourceId: string;
+  channelId?: string;
   tvgId: string;
   title: string;
   description?: string;
@@ -283,32 +369,117 @@ export interface AuditLog {
   createdAt: string;
 }
 
-export interface Settings {
-  panelName: string;
-  logo: string;
-  favicon: string;
-  mainUrl: string;
-  timezone: string;
-  language: string;
-  theme: 'dark' | 'light';
-  primaryColor: string;
-  secondaryColor: string;
-  smtpHost?: string;
-  smtpPort?: number;
-  smtpUser?: string;
-  smtpPass?: string;
-  tmdbApiKey?: string;
-  m3uSyncInterval: number;
-  epgSyncInterval: number;
-  maxImportSize: number;
-  cacheEnabled: boolean;
-  queueDriver: 'sync' | 'database' | 'redis';
-}
-
 export interface Notification {
   id: string;
   type: 'success' | 'error' | 'info' | 'warning';
   title?: string;
   message: string;
   timestamp: number;
+}
+
+export interface Settings {
+  panelName: string;
+  logo: string;
+  mainUrl: string;
+  timezone: string;
+  language: string;
+  theme: 'dark' | 'light';
+  primaryColor: string;
+  secondaryColor: string;
+  tmdbApiKey?: string;
+  tmdbLanguage: string;
+  m3uSyncInterval: number;
+  epgSyncInterval: number;
+  maxImportSize: number;
+  cacheEnabled: boolean;
+  queueDriver: 'sync' | 'database' | 'redis';
+  viewMode: 'grid' | 'table';
+  pageSize: 25 | 50 | 100;
+}
+
+export interface TmdbSearchResult {
+  id: number;
+  media_type?: 'movie' | 'tv';
+  title?: string;
+  name?: string;
+  original_title?: string;
+  original_name?: string;
+  overview?: string;
+  poster_path?: string;
+  backdrop_path?: string;
+  release_date?: string;
+  first_air_date?: string;
+  vote_average?: number;
+  genre_ids?: number[];
+}
+
+export interface TmdbDetails {
+  id: number;
+  title?: string;
+  name?: string;
+  original_title?: string;
+  original_name?: string;
+  overview?: string;
+  poster_path?: string;
+  backdrop_path?: string;
+  release_date?: string;
+  first_air_date?: string;
+  vote_average?: number;
+  runtime?: number;
+  episode_run_time?: number[];
+  genres: { id: number; name: string }[];
+  credits?: {
+    cast: { id: number; name: string; character: string }[];
+    crew: { id: number; name: string; job: string }[];
+  };
+  seasons?: {
+    id: number;
+    season_number: number;
+    name: string;
+    overview?: string;
+    poster_path?: string;
+    air_date?: string;
+    episode_count: number;
+  }[];
+  episodes?: {
+    id: number;
+    episode_number: number;
+    name: string;
+    overview?: string;
+    still_path?: string;
+    air_date?: string;
+    runtime?: number;
+  }[];
+  external_ids?: {
+    imdb_id?: string;
+  };
+  videos?: {
+    results: { key: string; site: string; type: string }[];
+  };
+}
+
+// Pagination
+export interface PaginatedResponse<T> {
+  data: T[];
+  meta: {
+    total: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+    from: number;
+    to: number;
+  };
+}
+
+export interface ListFilters {
+  search?: string;
+  categoryId?: string;
+  sourceId?: string;
+  status?: string;
+  active?: boolean;
+  adult?: boolean;
+  sortBy?: string;
+  sortDir?: 'asc' | 'desc';
+  page?: number;
+  pageSize?: number;
 }
